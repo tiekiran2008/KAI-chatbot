@@ -1,0 +1,75 @@
+/* src/styles/loginCard.css */
+/* Premium glassmorphism login card */
+.login-card {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  box-shadow: 0 0 20px rgba(0,255,255,0.4), 0 8px 32px rgba(0,0,0,0.5);
+  border-radius: 1rem;
+  position: relative; /* Enable pseudo overlay positioning */
+  overflow: hidden;
+  animation: floatCard 12s ease-in-out infinite;
+}
+/* Holographic reflection overlay */
+.login-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0) 60%);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  opacity: 0.6;
+  transform: translateY(-20%);
+  animation: hologramPulse 8s infinite ease-in-out;
+}
+@keyframes hologramPulse {
+  0%,100% { transform: translateY(-20%); opacity:0.5; }
+  50% { transform: translateY(0%); opacity:0.8; }
+}
+/* Neon glowing border using pseudo-element */
+.login-card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(45deg, #ff00ff, #00ffff, #00ff00, #ff00ff);
+  background-size: 400% 400%;
+  animation: neonBorder 12s linear infinite;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: intersect;
+  -webkit-mask-composite: destination-out;
+  padding: 2px;
+  z-index: -1;
+}
+@keyframes neonBorder {
+  0% {background-position: 0% 50%;}
+  50% {background-position: 100% 50%;}
+  100% {background-position: 0% 50%;}
+}
+/* Floating subtle animation */
+@keyframes floatCard {
+  0%, 100% {transform: translateY(0) rotate(0deg);}
+  50% {transform: translateY(-8px) rotate(0.5deg);}
+}
+/* Optional inner glow effect on hover */
+.login-card:hover {
+  box-shadow: 0 0 30px rgba(255, 255, 255, 0.3), 0 8px 32px rgba(0, 0, 0, 0.8);
+}
+@layer base {
+  :root, .dark {
+    --glow-primary: 139, 92, 246; /* default purple in rgb */
+    --background: 240 10% 4%;        /* Very dark, sleek background */
+    --foreground: 0 0% 96%;          /* Crisp white text */
+    --card: 240 5% 8%;               /* Elevated dark card */
+    --border: 240 5% 15%;            /* Subtle borders */
+    --primary: 265 89% 65%;          /* Vibrant purple accent */
+    --primary-foreground: 0 0% 100%; /* White text on primary */
+    --sidebar: 240 5% 6%;            /* Sleek sidebar */
+    --sidebar-border: 240 5% 12%;    /* Sidebar separator */
+    --radius: 1rem;
+    /* Cinematic lighting variables */
+    --ambient-light: 0deg 50% 20%;
+    --specular-light: 180deg 60% 30%;
+  }
+}

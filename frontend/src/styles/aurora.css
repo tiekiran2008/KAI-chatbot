@@ -1,0 +1,90 @@
+/* src/styles/aurora.css */
+
+/* Core dark background */
+.aurora-bg {
+  position: relative;
+  overflow: hidden;
+  min-height: 100vh;
+  background-color: #050816; /* deep night */
+}
+
+/* animated gradient mesh */
+.aurora-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(45deg, #4e00c3, #1e00ff, #0080ff, #ff00ff, #00ff99, #00ff80);
+  background-size: 600% 600%;
+  animation: auroraMove 20s ease infinite;
+  filter: blur(80px);
+  z-index: -2;
+}
+
+/* Mouse‑reactive glow intensity */
+.aurora-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,0.6), transparent 40%);
+  pointer-events: none;
+  mix-blend-mode: screen;
+  transition: background-position 0.1s ease-out;
+  z-index: -1;
+}
+
+/* Floating blurred orbs */
+.orb {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(255,0,255,0.4), transparent 70%);
+  filter: blur(120px);
+  border-radius: 50%;
+  animation: floatOrb 30s linear infinite;
+}
+
+/* Subtle particle system */
+.particle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: rgba(0,255,200,0.8);
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(0,255,200,0.6);
+  animation: drift 12s infinite ease-in-out;
+}
+
+/* Glass‑morphism login container */
+.login-card {
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.2);
+  box-shadow: 0 0 20px rgba(0,255,255,0.4), 0 8px 32px rgba(0,0,0,0.5);
+  border-radius: 1rem;
+  animation: floatCard 12s ease-in-out infinite;
+}
+
+/* Keyframes */
+@keyframes auroraMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes floatOrb {
+  0% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+  50% { transform: translate(200px, -150px) scale(1.2); opacity: 0.8; }
+  100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+}
+
+@keyframes drift {
+  0% { transform: translate(0,0); opacity:0.8; }
+  50% { transform: translate(30px, -40px); opacity:0.4; }
+  100% { transform: translate(0,0); opacity:0.8; }
+}
+
+@keyframes floatCard {
+  0%,100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-8px) scale(1.02); }
+}

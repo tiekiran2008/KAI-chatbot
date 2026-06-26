@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # --- FastAPI Backend Service ---
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatbot_backend
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_SERVER=${POSTGRES_SERVER:-localhost}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-ai_chatbot}
+      # If connecting to external Supabase PostgreSQL:
+      - DATABASE_URL=${DATABASE_URL}
+      # Gemini API configuration:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Security Keys:
+      - SECRET_KEY=${SECRET_KEY}
+      # Supabase Auth Secrets:
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+    depends_on:
+      - chromadb
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/chat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Use gunicorn for production-grade concurrency with memory leak prevention
+    command: ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--max-requests", "1000", "--max-requests-jitter", "50", "-b", "0.0.0.0:8000"]
+
+  # --- PostgreSQL Database Service ---
+  postgres:
+    image: postgres:15-alpine
+    container_name: chatbot_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-securepassword}
+      - POSTGRES_DB=${POSTGRES_DB:-ai_chatbot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- ChromaDB Vector Database Service ---
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    container_name: chatbot_chromadb
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - IS_PERSISTENT=TRUE
+      # ALLOW_RESET=TRUE is removed for production safety
+
+  # --- Next.js Frontend Service ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatbot_frontend
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Next.js public endpoints (routed via host IP or domain in production)
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - backend
+
+volumes:
+  chroma_data:
+    driver: local
+  pg_data:
+    driver: local

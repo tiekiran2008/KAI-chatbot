@@ -19,9 +19,9 @@ reusable_oauth2 = OAuth2PasswordBearer(
 )
 
 async def get_current_user(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     token: str = Depends(reusable_oauth2),
-    request: Request
 ) -> User:
     """Authenticate request and return the current user, with extensive debug logging."""
     """

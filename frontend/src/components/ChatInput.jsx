@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Send, Paperclip, X, FileText, Square, Mic, Image } from 'lucide-react';
 
 export default function ChatInput({
@@ -17,6 +17,76 @@ export default function ChatInput({
   glowColor
 }) {
   const fileInputRef = useRef(null);
+
+  const [isListening, setIsListening] = useState(false);
+  const [micError, setMicError] = useState('');
+  const recognitionRef = useRef(null);
+  const originalInputRef = useRef('');
+
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition && !recognitionRef.current) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => setIsListening(true);
+
+      recognition.onresult = (event) => {
+        let currentTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          currentTranscript += event.results[i][0].transcript;
+        }
+        
+        const newText = originalInputRef.current 
+          ? originalInputRef.current + ' ' + currentTranscript 
+          : currentTranscript;
+          
+        setInputMessage(newText);
+        
+        const ta = document.querySelector('textarea');
+        if (ta) {
+          ta.style.height = 'auto';
+          ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'not-allowed') {
+          setMicError('Microphone access denied.');
+        } else {
+          setMicError(`Mic error: ${event.error}`);
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => setIsListening(false);
+      
+      recognitionRef.current = recognition;
+    }
+  }, [setInputMessage]);
+
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    setMicError('');
+    if (!recognitionRef.current) {
+      setMicError('Speech recognition is not supported in this browser.');
+      return;
+    }
+
+    originalInputRef.current = inputMessage;
+    try {
+      recognitionRef.current.start();
+    } catch (err) {
+      console.error(err);
+      setMicError('Error starting microphone.');
+      setIsListening(false);
+    }
+  };
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -51,6 +121,13 @@ export default function ChatInput({
       )}
 
       <div className="max-w-3xl mx-auto relative">
+        {micError && (
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 z-10 bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-1.5 rounded-full text-[11px] flex items-center gap-2 shadow-sm animate-in slide-in-from-bottom-2 duration-300">
+            <span>{micError}</span>
+            <button onClick={() => setMicError('')} className="hover:text-red-300 transition-colors"><X size={12}/></button>
+          </div>
+        )}
+
         {isStreaming && (
           <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-10 animate-in slide-in-from-bottom-2 duration-300">
             <button
@@ -139,7 +216,12 @@ export default function ChatInput({
             <div className="flex items-center gap-1 flex-shrink-0">
               <button
                 type="button"
-                className="p-2.5 text-gray-400 hover:text-foreground hover:bg-border/60 rounded-full transition-all hidden sm:flex"
+                onClick={toggleListening}
+                className={`p-2.5 rounded-full transition-all hidden sm:flex ${
+                  isListening 
+                    ? 'bg-red-500/20 text-red-500 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.4)]' 
+                    : 'text-gray-400 hover:text-foreground hover:bg-border/60'
+                }`}
                 title="Use microphone"
               >
                 <Mic size={18} />

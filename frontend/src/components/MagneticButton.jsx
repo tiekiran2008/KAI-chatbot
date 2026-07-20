@@ -40,9 +40,8 @@ export default function MagneticButton({ children, className = '', ...props }) {
     <motion.button
       ref={btnRef}
       className={`magnetic-button ${className}`}
-      style={{
-        transform: `translate(${offset.x}px, ${offset.y}px)`,
-      }}
+      animate={{ x: offset.x, y: offset.y }}
+      transition={{ type: "spring", stiffness: 150, damping: 15, mass: 0.1 }}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
       whileHover={{ scale: 1.04 }}

@@ -15,6 +15,7 @@ const Sidebar = React.memo(function Sidebar({
   onDeleteDocument,
   onSelectDocument,
   onOpenUpload,
+  onOpenSettings,
   user,
   onLogout
 }) {
@@ -292,13 +293,23 @@ const Sidebar = React.memo(function Sidebar({
               </div>
             </div>
 
-            <button
-              onClick={onLogout}
-              className="w-full h-8 px-2 flex items-center gap-2 hover:bg-red-500/10 border border-transparent rounded-lg text-gray-400 hover:text-red-400 text-xs font-medium transition-all"
-            >
-              <LogOut size={13} />
-              <span>Log out</span>
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={onOpenSettings}
+                className="flex-1 h-8 px-2 flex items-center justify-center gap-2 hover:bg-primary/10 border border-transparent rounded-lg text-gray-400 hover:text-primary text-xs font-medium transition-all"
+              >
+                <Settings size={13} />
+                <span>Settings</span>
+              </button>
+
+              <button
+                onClick={onLogout}
+                className="h-8 px-3 flex items-center justify-center hover:bg-red-500/10 border border-transparent rounded-lg text-gray-400 hover:text-red-400 transition-all"
+                title="Log out"
+              >
+                <LogOut size={13} />
+              </button>
+            </div>
           </div>
         </div>
 

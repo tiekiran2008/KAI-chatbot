@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     """
     Asynchronous context manager for app startup and shutdown events.
     Verifies connection to PostgreSQL database, initializes DB schemas,
-    and validates the google-genai (Gemini) client at launch.
+    validates the google-genai (Gemini) client at launch, and sets up LangGraph.
     """
     logger.info("Initializing application startup sequence...")
 
@@ -51,9 +51,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to verify Gemini client on startup: {e}")
 
+    # 3. Initialize HITL Checkpointer and build Graph
+    try:
+        from app.graph.checkpointer import init_checkpointer, get_checkpointer
+        from app.graph.graph import build_graph
+        from app.graph import graph as graph_module
+        
+        await init_checkpointer()
+        checkpointer = get_checkpointer()
+        graph_module.graph_app = build_graph(checkpointer=checkpointer)
+        logger.info(f"LangGraph initialized. HITL_ENABLED={settings.HITL_ENABLED}")
+    except Exception as e:
+        logger.error(f"Failed to initialize LangGraph checkpointer: {e}")
+
     yield
 
     logger.info("Initiating application shutdown sequence...")
+    
+    # Close Checkpointer
+    try:
+        from app.graph.checkpointer import close_checkpointer
+        await close_checkpointer()
+    except Exception as e:
+        logger.error(f"Failed to close checkpointer: {e}")
+
     # Dispose connection pools properly
     await engine.dispose()
     logger.info("Database connection pool disposed. Shutdown complete.")

@@ -57,6 +57,176 @@ else:
     gemini_client = None
     print("GEMINI CLIENT: GEMINI_API_KEY not found in environment — LLM features will fail")
 
+# ============================================================
+# Tool Implementations
+# ============================================================
+
+import ast
+import operator
+import math
+import urllib.request
+import urllib.parse
+
+
+def _tool_get_current_time() -> str:
+    """Returns the current date and time."""
+    now = datetime.now()
+    return now.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _tool_calculate(expression: str) -> str:
+    """Safely evaluate a mathematical expression."""
+    _operators = {
+        ast.Add: operator.add, ast.Sub: operator.sub,
+        ast.Mult: operator.mul, ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv, ast.Pow: operator.pow,
+        ast.Mod: operator.mod, ast.USub: operator.neg, ast.UAdd: operator.pos,
+    }
+    _functions = {
+        'sin': math.sin, 'cos': math.cos, 'tan': math.tan,
+        'sqrt': math.sqrt, 'log': math.log, 'log10': math.log10,
+        'exp': math.exp, 'pi': math.pi, 'e': math.e,
+        'abs': abs, 'round': round,
+    }
+    def _eval(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        elif isinstance(node, ast.BinOp) and type(node.op) in _operators:
+            return _operators[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp) and type(node.op) in _operators:
+            return _operators[type(node.op)](_eval(node.operand))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _functions:
+            fn = _functions[node.func.id]
+            return fn(*[_eval(a) for a in node.args]) if callable(fn) else fn
+        elif isinstance(node, ast.Name) and node.id in _functions and not callable(_functions[node.id]):
+            return _functions[node.id]
+        elif isinstance(node, ast.Expression):
+            return _eval(node.body)
+        raise ValueError(f"Unsupported syntax: {type(node)}")
+    try:
+        return str(_eval(ast.parse(expression, mode='eval')))
+    except Exception as e:
+        return f"Error evaluating expression: {e}"
+
+
+def _tool_search_wikipedia(query: str) -> str:
+    """Search Wikipedia and return a summary."""
+    try:
+        search_url = (
+            f"https://en.wikipedia.org/w/api.php?action=query&list=search"
+            f"&srsearch={urllib.parse.quote(query)}&utf8=&format=json&srlimit=1"
+        )
+        req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5.0) as r:
+            data = json.loads(r.read().decode())
+        results = data.get('query', {}).get('search', [])
+        if not results:
+            return f"No Wikipedia results found for '{query}'."
+        title = results[0]['title']
+        summary_url = (
+            f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts"
+            f"&exsentences=5&exlimit=1&titles={urllib.parse.quote(title)}"
+            f"&explaintext=1&formatversion=2&format=json"
+        )
+        req = urllib.request.Request(summary_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5.0) as r:
+            sdata = json.loads(r.read().decode())
+        pages = sdata.get('query', {}).get('pages', [])
+        if not pages or 'extract' not in pages[0]:
+            return f"Could not retrieve summary for '{title}'."
+        return f"Title: {title}\nSummary: {pages[0]['extract'].strip()}"
+    except Exception as e:
+        return f"Error searching Wikipedia: {e}"
+
+
+# Tool registry: name → callable
+TOOL_REGISTRY = {
+    "get_current_time": _tool_get_current_time,
+    "calculate": _tool_calculate,
+    "search_wikipedia": _tool_search_wikipedia,
+}
+
+
+def execute_tool(name: str, args: dict) -> str:
+    """Execute a registered tool by name."""
+    if name not in TOOL_REGISTRY:
+        return f"Error: Tool '{name}' not found."
+    try:
+        result = TOOL_REGISTRY[name](**args)
+        return str(result)
+    except Exception as e:
+        return f"Error executing tool '{name}': {e}"
+
+
+# ============================================================
+# Gemini Tool Declarations (typed function schemas for the SDK)
+# ============================================================
+
+GEMINI_TOOLS = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="get_current_time",
+            description=(
+                "Returns the current date, time, day of the week, and timezone. "
+                "ALWAYS call this tool when the user asks about the current time, "
+                "date, day, or timezone. Never answer time questions from memory."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="calculate",
+            description=(
+                "Evaluates a mathematical expression and returns the numeric result. "
+                "Use this for any arithmetic, algebra, or math calculation."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "expression": types.Schema(
+                        type=types.Type.STRING,
+                        description="The mathematical expression to evaluate, e.g. '325 * 487'",
+                    )
+                },
+                required=["expression"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="search_wikipedia",
+            description=(
+                "Searches Wikipedia for a topic and returns a concise summary. "
+                "Use this for factual lookups, historical information, or general knowledge."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "query": types.Schema(
+                        type=types.Type.STRING,
+                        description="The search query to look up on Wikipedia",
+                    )
+                },
+                required=["query"],
+            ),
+        ),
+    ]
+)
+
+# Keyword sets for hard fallback detection (used if Gemini skips the tool call)
+_TIME_KEYWORDS = {
+    "time", "clock", "date", "today", "now", "current time", "what time",
+    "day", "hour", "minute", "second", "timezone", "what day",
+}
+
+# Print registered tools at startup
+print("=" * 60)
+print("TOOL REGISTRY: Registered tools at startup:")
+for tool_name in TOOL_REGISTRY:
+    print(f"  [OK] {tool_name}")
+print(f"  Total: {len(TOOL_REGISTRY)} tools")
+print("=" * 60)
+
 # Authentication Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
@@ -73,11 +243,17 @@ users_db = {
         "email": "user@example.com",
         "hashed_password": pwd_context.hash("password123"),
         "disabled": False,
+        "sub": "local-test-uuid",
+        "user_id": "local-test-uuid",
     }
 }
 
 # In-memory document store (unchanged)
 documents_store: Dict[str, Dict[str, Any]] = {}
+
+# In-memory settings and avatars
+settings_db: Dict[str, Dict[str, Any]] = {}
+avatars_db: Dict[str, str] = {}
 
 app = FastAPI(title="Gemini Chat API")
 
@@ -165,6 +341,12 @@ class ChatUpdate(BaseModel):
 
 class StreamMessageRequest(BaseModel):
     message: str
+
+class SettingsUpdate(BaseModel):
+    settings: Dict[str, Any]
+
+class AvatarUpload(BaseModel):
+    avatar_base64: str
 
 
 # ============================================================
@@ -490,12 +672,57 @@ async def get_me(current_user: User = Depends(get_current_active_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "username": current_user.username,
+        "avatar": avatars_db.get(current_user.username)
     }
+
+# ============================================================
+# Settings & Profile Endpoints
+# ============================================================
+
+@app.get("/api/v1/settings")
+async def get_settings(current_user: User = Depends(get_current_active_user)):
+    user_id = current_user.sub or current_user.user_id or current_user.username
+    try:
+        res = supabase.table("user_settings").select("settings").eq("user_id", user_id).execute()
+        if res.data and len(res.data) > 0:
+            return {"settings": res.data[0]["settings"]}
+    except Exception as e:
+        logger.warning(f"Failed to fetch settings from Supabase, using fallback: {e}")
+    return {"settings": settings_db.get(user_id, {})}
+
+@app.post("/api/v1/settings")
+async def update_settings(update: SettingsUpdate, current_user: User = Depends(get_current_active_user)):
+    user_id = current_user.sub or current_user.user_id or current_user.username
+    current_settings = settings_db.get(user_id, {})
+    current_settings.update(update.settings)
+    settings_db[user_id] = current_settings
+    try:
+        res = supabase.table("user_settings").select("settings").eq("user_id", user_id).execute()
+        if res.data and len(res.data) > 0:
+            supabase.table("user_settings").update({"settings": current_settings}).eq("user_id", user_id).execute()
+        else:
+            supabase.table("user_settings").insert({"user_id": user_id, "settings": current_settings}).execute()
+    except Exception as e:
+        logger.warning(f"Failed to save settings to Supabase, saved to fallback: {e}")
+    return {"status": "success", "settings": current_settings}
+
+@app.post("/api/v1/users/avatar")
+async def upload_avatar(upload: AvatarUpload, current_user: User = Depends(get_current_active_user)):
+    avatars_db[current_user.username] = upload.avatar_base64
+    return {"status": "success"}
 
 
 # ============================================================
 # /api/v1/chat  — Chat session CRUD (Supabase-backed)
 # ============================================================
+
+def generate_chat_title(message: str) -> str:
+    """Generate a short title (4-8 words) from the user's first message."""
+    words = message.split()
+    if len(words) > 6:
+        return " ".join(words[:6]) + "..."
+    return " ".join(words)
+
 
 @app.get("/api/v1/chat")
 async def list_chats(current_user: User = Depends(get_current_active_user)):
@@ -506,6 +733,15 @@ async def list_chats(current_user: User = Depends(get_current_active_user)):
     for c in chats:
         # Fetch the last message for preview
         msgs = db_get_messages(c["id"])
+        
+        # Retrospective title update for generic "New Chat"
+        if (c.get("title") == "New Chat" or not c.get("title")) and msgs:
+            first_user_msg = next((m for m in msgs if m["role"] == "user"), None)
+            if first_user_msg:
+                new_title = generate_chat_title(first_user_msg["content"])
+                db_update_chat_title(c["id"], uid, new_title)
+                c["title"] = new_title
+                
         last_msg = msgs[-1]["content"] if msgs else ""
         result.append({
             "id": c["id"],
@@ -555,6 +791,15 @@ async def get_chat(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
     messages = db_get_messages(chat_id)
+
+    # Retrospective update for "New Chat" titles
+    if (chat.get("title") == "New Chat" or not chat.get("title")) and messages:
+        first_user_msg = next((m for m in messages if m["role"] == "user"), None)
+        if first_user_msg:
+            new_title = generate_chat_title(first_user_msg["content"])
+            db_update_chat_title(chat_id, uid, new_title)
+            chat["title"] = new_title
+
     return {"id": chat["id"], "title": chat["title"], "messages": messages}
 
 
@@ -647,37 +892,171 @@ async def stream_chat_message(
         full_response = ""
         assistant_msg_id = str(uuid.uuid4())
         user_msg_id = str(uuid.uuid4())
-        # Load chat history from Supabase
-        history = db_get_messages(chat_id)
-        gemini_history = []
-        for m in history:
-            role = "model" if m["role"] == "assistant" else "user"
-            gemini_history.append(
-                types.Content(
-                    role=role,
-                    parts=[types.Part.from_text(text=m["content"])],
-                )
-            )
-        # Append current user message
-        gemini_history.append(
-            types.Content(role="user", parts=[types.Part.from_text(text=body.message)])
-        )
-        # Save user message to Supabase before streaming
-        db_insert_message(user_msg_id, chat_id, "user", body.message)
         try:
-            # GEMINI STEP 3: Stream response from Gemini
-            print("GEMINI STEP 3")
-            print(f"Calling Gemini model={model_name} with {len(gemini_history)} turns")
-            # generate_content_stream() returns a coroutine in google-genai SDK —
-            # it must be awaited first to get the async iterator, then iterated.
-            response_stream = await gemini_client.aio.models.generate_content_stream(
-                model=model_name,
-                contents=gemini_history,
+            # ── Load chat history from Supabase ─────────────────────────────
+            history = db_get_messages(chat_id)
+            gemini_history: List[types.Content] = []
+            for m in history:
+                role = "model" if m["role"] == "assistant" else "user"
+                gemini_history.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=m["content"])],
+                    )
+                )
+            # Append current user message
+            gemini_history.append(
+                types.Content(role="user", parts=[types.Part.from_text(text=body.message)])
             )
-            async for chunk in response_stream:
-                if chunk.text:
-                    full_response += chunk.text
-                    yield f"data: {json.dumps({'token': chunk.text})}\n\n"
+
+            # ── Save user message to Supabase before streaming ──────────────
+            db_insert_message(user_msg_id, chat_id, "user", body.message)
+
+            # ── Hard keyword fallback: detect time queries before calling Gemini
+            msg_lower = body.message.lower()
+            _forced_tool: Optional[str] = None
+            _forced_tool_args: dict = {}
+            if any(kw in msg_lower for kw in _TIME_KEYWORDS):
+                _forced_tool = "get_current_time"
+                _forced_tool_args = {}
+                print(f"[Tool Fallback] Time keyword detected in: {body.message!r}")
+                print(f"[Tool Fallback] Forcing tool: get_current_time")
+
+            # ── System prompt that MANDATES tool usage ───────────────────
+            system_instruction = (
+                "You are KAI, a helpful and intelligent AI assistant.\n\n"
+                "CRITICAL TOOL USAGE RULES — you MUST follow these absolutely:\n"
+                "1. You have access to tools. When a matching tool exists for the user's request, "
+                "you MUST call the tool instead of answering from your own knowledge.\n"
+                "2. For ANY question about the current time, date, day of the week, or timezone: "
+                "you MUST call the get_current_time tool. Do NOT say 'As an AI, I don't have access "
+                "to real-time information'. That response is FORBIDDEN when a tool exists.\n"
+                "3. For ANY mathematical calculation: you MUST call the calculate tool.\n"
+                "4. For factual lookups or general knowledge: you MUST call the search_wikipedia tool.\n"
+                "5. After the tool returns its result, use that result to compose your final answer.\n"
+                "6. Never refuse to use a tool when one is available and appropriate."
+            )
+
+            # ── Log which tools are being sent to Gemini ─────────────────
+            tool_names = [fd.name for fd in GEMINI_TOOLS.function_declarations]
+            print("GEMINI STEP 3")
+            print(f"[Tool Calling] Tools sent to Gemini: {tool_names}")
+            print(f"[Tool Calling] User message: {body.message!r}")
+
+            # Fetch settings
+            user_id_for_settings = current_user.sub or current_user.user_id or current_user.username
+            user_settings = settings_db.get(user_id_for_settings, {})
+            try:
+                res = supabase.table("user_settings").select("settings").eq("user_id", user_id_for_settings).execute()
+                if res.data and len(res.data) > 0:
+                    user_settings = res.data[0]["settings"]
+            except Exception:
+                pass
+
+            # Apply user settings to Gemini configuration
+            sys_prompt = user_settings.get("system_prompt")
+            if sys_prompt and sys_prompt.strip():
+                system_instruction = sys_prompt + "\n\n" + system_instruction
+
+            model_id = user_settings.get("ai_model", model_name)
+            temperature = float(user_settings.get("temperature", 1.0))
+            max_output_tokens = int(user_settings.get("max_tokens", 8192)) if user_settings.get("max_tokens") else None
+            print(f"Calling Gemini model={model_id} with {len(gemini_history)} turns (temp={temperature}, max_tokens={max_output_tokens})")
+
+            gemini_config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                tools=[GEMINI_TOOLS],
+                tool_config=types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="AUTO",  # Gemini decides when to call tools
+                    )
+                ),
+            )
+
+            # ── Stream the response directly to avoid TTFB delays ──
+            print(f"[Tool Calling] Starting generate_content_stream...")
+            initial_stream = await gemini_client.aio.models.generate_content_stream(
+                model=model_id,
+                contents=gemini_history,
+                config=gemini_config,
+            )
+
+            fc = None
+            async for chunk in initial_stream:
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if hasattr(part, "function_call") and part.function_call:
+                            fc = part.function_call
+                            break
+                        if part.text:
+                            full_response += part.text
+                            yield f"data: {json.dumps({'token': part.text})}\n\n"
+                
+                # If we detected a function call, break the stream
+                if fc:
+                    break
+
+            if fc:
+                print(f"[Tool Calling] [OK] Gemini requested tool: {fc.name!r}  args: {dict(fc.args or {})!r}")
+                fc_name = fc.name
+                fc_args = {k: v for k, v in fc.args.items()} if fc.args else {}
+                tool_result = execute_tool(fc_name, fc_args)
+                print(f"[Tool Calling] [OK] Tool '{fc_name}' result: {tool_result!r}")
+
+                # Build updated contents with tool request + result
+                try:
+                    fc_part = types.Part.from_function_call(name=fc_name, args=fc_args)
+                except AttributeError:
+                    fc_part = types.Part(function_call=types.FunctionCall(name=fc_name, args=fc_args))
+
+                gemini_history.append(types.Content(role="model", parts=[fc_part]))
+                fr_part = types.Part.from_function_response(
+                    name=fc_name,
+                    response={"result": tool_result}
+                )
+                gemini_history.append(types.Content(role="user", parts=[fr_part]))
+
+                print("[Tool Calling] Streaming final answer after tool execution...")
+                follow_stream = await gemini_client.aio.models.generate_content_stream(
+                    model=model_name,
+                    contents=gemini_history,
+                    config=gemini_config,
+                )
+                async for chunk in follow_stream:
+                    if chunk.text:
+                        full_response += chunk.text
+                        yield f"data: {json.dumps({'token': chunk.text})}\n\n"
+
+            elif _forced_tool and not full_response.strip():
+                # Hard fallback: Gemini skipped the tool, execute it directly 
+                print(f"[Tool Fallback] [!] Gemini skipped tool. Forcing execution of '{_forced_tool}'")
+                tool_result = execute_tool(_forced_tool, _forced_tool_args)
+                print(f"[Tool Fallback] [OK] Forced tool result: {tool_result!r}")
+
+                try:
+                    fc_part = types.Part.from_function_call(name=_forced_tool, args=_forced_tool_args)
+                except AttributeError:
+                    fc_part = types.Part(function_call=types.FunctionCall(name=_forced_tool, args=_forced_tool_args))
+
+                gemini_history.append(types.Content(role="model", parts=[fc_part]))
+                fr_part = types.Part.from_function_response(
+                    name=_forced_tool,
+                    response={"result": tool_result}
+                )
+                gemini_history.append(types.Content(role="user", parts=[fr_part]))
+
+                follow_stream = await gemini_client.aio.models.generate_content_stream(
+                    model=model_name,
+                    contents=gemini_history,
+                    config=gemini_config,
+                )
+                async for chunk in follow_stream:
+                    if chunk.text:
+                        full_response += chunk.text
+                        yield f"data: {json.dumps({'token': chunk.text})}\n\n"
+
             print(f"GEMINI STEP 3 complete. Response length: {len(full_response)} chars")
 
         except asyncio.TimeoutError:
@@ -722,7 +1101,21 @@ async def stream_chat_message(
                 content=full_response,
                 citations=[],
             )
-            yield f"data: {json.dumps({'done': True, 'message_id': assistant_msg_id, 'content': full_response, 'citations': []})}\n\n"
+            
+            final_event = {
+                'done': True,
+                'message_id': assistant_msg_id,
+                'content': full_response,
+                'citations': []
+            }
+            
+            # If it's the first message, generate and save title, then send to client
+            if chat.get("title") == "New Chat" or not chat.get("title"):
+                new_title = generate_chat_title(body.message)
+                db_update_chat_title(chat_id, lookup_user_id, new_title)
+                final_event["new_title"] = new_title
+
+            yield f"data: {json.dumps(final_event)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

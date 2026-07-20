@@ -2,6 +2,7 @@ import uuid
 import logging
 import json
 from typing import List, Dict, Any, Optional
+from langsmith import traceable
 
 from app.models.document import UploadedDocument
 from app.services.chunker import chunker_service
@@ -108,6 +109,7 @@ class RAGService:
                 
         return unique_contexts
 
+    @traceable(run_type="retriever")
     async def retrieve_context(
         self,
         user_id: uuid.UUID,

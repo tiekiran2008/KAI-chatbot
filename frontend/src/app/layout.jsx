@@ -6,12 +6,16 @@ export const metadata = {
   description: 'KAI CHATBOT powered by Gemini, FastAPI, and ChromaDB.',
 };
 
+import { SettingsProvider } from '@/context/SettingsContext';
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className="dark h-full">
       <body className="h-full antialiased font-sans">
-        {children}
-        <GlowColorPicker />
+        <SettingsProvider>
+          {children}
+          <GlowColorPicker />
+        </SettingsProvider>
       </body>
     </html>
   );

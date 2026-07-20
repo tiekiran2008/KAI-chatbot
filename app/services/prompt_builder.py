@@ -55,9 +55,16 @@ class PromptBuilder:
             "   - Violating this rule by expanding unsolicited is STRICTLY FORBIDDEN.\n"
         )
 
-    def build_system_prompt(self, custom_prompt: Optional[str] = None, history_summary: Optional[str] = None) -> str:
-        """Return the compiled system prompt instructions, optionally prepending historical summaries."""
+    def build_system_prompt(
+        self,
+        custom_prompt: Optional[str] = None,
+        history_summary: Optional[str] = None,
+        agent_memories: Optional[str] = None
+    ) -> str:
+        """Return the compiled system prompt instructions, optionally prepending historical summaries and agent memory."""
         prompt = self.default_system_prompt
+        if agent_memories and agent_memories.strip():
+            prompt = f"{prompt}\n\n{agent_memories.strip()}"
         if history_summary and history_summary.strip():
             prompt = f"{prompt}\n\n=== RECENT CONVERSATION SUMMARY ===\n{history_summary.strip()}"
         if custom_prompt and custom_prompt.strip():

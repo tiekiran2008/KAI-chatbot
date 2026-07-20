@@ -62,6 +62,17 @@ class Settings(BaseSettings):
         if info.data.get("APP_ENV") == "production" and not v:
             raise ValueError(f"Missing value for {info.field_name}. Must be securely configured in production.")
         return v
+        
+    # LangSmith Observability
+    LANGCHAIN_TRACING_V2: Optional[str] = None
+    LANGCHAIN_API_KEY: Optional[str] = None
+    LANGCHAIN_PROJECT: Optional[str] = None
+    
+    # Agent Memory
+    MEMORY_ENABLED: bool = True
+
+    # Human-in-the-Loop
+    HITL_ENABLED: bool = True
 
 # Instantiate settings
 settings = Settings()

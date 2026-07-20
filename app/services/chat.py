@@ -10,6 +10,8 @@ from app.models.chat import Chat, Message, MessageRole
 from app.services.gemini import gemini_service
 from app.services.rag import rag_service
 from app.services.prompt_builder import prompt_builder
+from app.graph import graph as graph_module
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -91,39 +93,7 @@ class ChatService:
         chat = await self.get_chat_detail(db, chat_id, user_id)
         await db.delete(chat)
 
-    async def _prepare_chat_context(self, chat: Chat, user_id: uuid.UUID, content: str):
-        # 3. Classify incoming query
-        classification = await gemini_service.classify_query(content)
-        logger.info(f"Query Classification: '{content}' -> classified as '{classification}'")
-
-        contexts = []
-        if classification == "normal chat":
-            logger.info("Chit-chat detected. Bypassing RAG vector retrieval.")
-        else:
-            retrieval_query = content
-            if classification == "follow-up question":
-                prev_turns = []
-                for msg in chat.messages[:-1]:
-                    prev_turns.append({
-                        "role": "user" if msg.role == MessageRole.user else "model",
-                        "content": msg.content
-                    })
-                try:
-                    retrieval_query = await gemini_service.reformulate_query(prev_turns, content)
-                    logger.info(f"Follow-up query '{content}' reformulated to standalone query: '{retrieval_query}'")
-                except Exception as e:
-                    logger.error(f"Query reformulation failed: {e}")
-                    retrieval_query = content
-                    for msg in reversed(chat.messages[:-1]):
-                        if msg.role == MessageRole.user:
-                            retrieval_query = msg.content
-                            break
-
-            try:
-                contexts = await rag_service.retrieve_context(user_id=user_id, query=retrieval_query)
-            except Exception as e:
-                logger.error(f"RAG retrieval failed, falling back to standard prompt: {e}")
-
+    async def _build_history_and_summary(self, chat: Chat):
         # 4. Compile long-term memory summary if history is large
         history_summary = None
         if len(chat.messages) > CONTEXT_WINDOW_LIMIT:
@@ -137,7 +107,6 @@ class ChatService:
             logger.info(f"Summarizing {len(old_messages)} old messages to preserve long-term context...")
             history_summary = await gemini_service.summarize_history(old_history)
 
-        # Retrieve recent history and format via PromptBuilder
         messages = chat.messages
         recent_messages = messages[-CONTEXT_WINDOW_LIMIT:]
 
@@ -147,14 +116,8 @@ class ChatService:
                 "role": "user" if msg.role == MessageRole.user else "model",
                 "content": msg.content
             })
-
-        formatted_history = prompt_builder.format_history_for_gemini(
-            history=raw_history,
-            contexts=contexts if classification != "normal chat" else None
-        )
-
-        system_prompt = prompt_builder.build_system_prompt(chat.system_prompt, history_summary)
-        return formatted_history, system_prompt, contexts
+            
+        return raw_history, history_summary
 
     async def send_message(
         self,
@@ -164,13 +127,13 @@ class ChatService:
         content: str
     ) -> Dict[str, Any]:
         """
-        Process a new message turn (non-streaming). Saves user input, performs RAG retrieval,
-        optimizes context memory, sends to Gemini, and saves the assistant response.
+        Process a new message turn (non-streaming). Saves user input, orchestrates via LangGraph,
+        and saves the assistant response.
         """
         # 1. Fetch chat and validate ownership
         chat = await self.get_chat_detail(db, chat_id, user_id)
 
-        # 2. Store the user's clean message (keeps DB representation pristine)
+        # 2. Store the user's clean message
         user_message = Message(
             chat_id=chat_id,
             role=MessageRole.user,
@@ -178,21 +141,44 @@ class ChatService:
         )
         db.add(user_message)
         chat.message_count += 1
-        
         await db.flush()
 
-        # 3. Prepare Chat Context
-        formatted_history, system_prompt, contexts = await self._prepare_chat_context(chat, user_id, content)
-
-        # 5. Generate AI response from Gemini
+        # 3. Setup Graph State
+        raw_history, history_summary = await self._build_history_and_summary(chat)
+        
+        initial_state = {
+            "user_id": str(user_id),
+            "user_message": content,
+            "chat_id": str(chat_id),
+            "history": raw_history,
+            "system_prompt": chat.system_prompt,
+            "history_summary": history_summary,
+            "is_streaming": False
+        }
+        
+        # 4. Invoke LangGraph with thread_id for checkpointing
+        graph_config = {"configurable": {"thread_id": str(chat_id)}}
         try:
-            ai_response = await gemini_service.generate_response(
-                history=formatted_history,
-                system_prompt=system_prompt
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate LLM response: {e}")
-            raise RuntimeError(f"Chat completion failed: {str(e)}")
+            final_state = await graph_module.graph_app.ainvoke(initial_state, config=graph_config)
+        except Exception as exc:
+            # Handle HITL interrupt — graph paused awaiting human approval
+            exc_name = type(exc).__name__
+            if "NodeInterrupt" in exc_name or "GraphInterrupt" in exc_name:
+                interrupt_data = exc.args[0] if exc.args else {}
+                logger.info(f"[HITL] Graph interrupted for chat {chat_id}: {interrupt_data}")
+                return {
+                    "hitl_pending": True,
+                    "chat_id": str(chat_id),
+                    "pending_action": interrupt_data.get("pending_action", ""),
+                    "pending_action_type": interrupt_data.get("pending_action_type", "unknown"),
+                    "message": interrupt_data.get("message", "Action requires your approval."),
+                    "actions": interrupt_data.get("actions", ["approve", "edit", "reject"])
+                }
+            raise
+
+        ai_response_content = final_state.get("final_response", "")
+        final_tokens = final_state.get("final_tokens", {"prompt_tokens": 0, "completion_tokens": 0})
+        contexts = final_state.get("contexts", [])
 
         citations = []
         for ctx in contexts:
@@ -207,9 +193,9 @@ class ChatService:
         assistant_message = Message(
             chat_id=chat_id,
             role=MessageRole.assistant,
-            content=ai_response["content"],
-            prompt_tokens=ai_response["prompt_tokens"],
-            completion_tokens=ai_response["completion_tokens"],
+            content=ai_response_content,
+            prompt_tokens=final_tokens["prompt_tokens"],
+            completion_tokens=final_tokens["completion_tokens"],
             citations=citations if citations else None
         )
         db.add(assistant_message)
@@ -240,8 +226,7 @@ class ChatService:
         content: str
     ) -> AsyncGenerator[str, None]:
         """
-        Submits user prompt, retrieves historical database contexts, triggers RAG vector search,
-        builds context augmented prompts, and streams Gemini tokens back using SSE format.
+        Submits user prompt, triggers LangGraph orchestration, and streams tokens back using SSE.
         """
         # 1. Fetch chat and validate ownership
         chat = await self.get_chat_detail(db, chat_id, user_id)
@@ -254,17 +239,48 @@ class ChatService:
         )
         db.add(user_message)
         chat.message_count += 1
-        
         await db.commit()
 
-        # 3. Prepare Chat Context
-        formatted_history, system_prompt, contexts = await self._prepare_chat_context(chat, user_id, content)
+        # 3. Setup Graph State
+        raw_history, history_summary = await self._build_history_and_summary(chat)
+        
+        initial_state = {
+            "user_id": str(user_id),
+            "user_message": content,
+            "chat_id": str(chat_id),
+            "history": raw_history,
+            "system_prompt": chat.system_prompt,
+            "history_summary": history_summary,
+            "is_streaming": True
+        }
 
-        # 5. Initialize stream generation from Gemini API
-        response_stream = gemini_service.generate_stream_response(
-            history=formatted_history,
-            system_prompt=system_prompt
-        )
+        # 4. Invoke LangGraph with thread_id for checkpointing
+        graph_config = {"configurable": {"thread_id": str(chat_id)}}
+        try:
+            final_state = await graph_module.graph_app.ainvoke(initial_state, config=graph_config)
+        except Exception as exc:
+            exc_name = type(exc).__name__
+            if "NodeInterrupt" in exc_name or "GraphInterrupt" in exc_name:
+                interrupt_data = exc.args[0] if exc.args else {}
+                logger.info(f"[HITL] Streaming graph interrupted for chat {chat_id}.")
+                # Yield a structured HITL event so the frontend can render approval UI
+                hitl_payload = {
+                    "hitl_pending": True,
+                    "chat_id": str(chat_id),
+                    "pending_action": interrupt_data.get("pending_action", ""),
+                    "pending_action_type": interrupt_data.get("pending_action_type", "unknown"),
+                    "message": interrupt_data.get("message", "Action requires your approval."),
+                    "actions": interrupt_data.get("actions", ["approve", "edit", "reject"])
+                }
+                yield f"data: {json.dumps(hitl_payload)}\n\n"
+                return
+            raise
+
+        response_stream = final_state.get("response_stream")
+        contexts = final_state.get("contexts", [])
+        
+        if not response_stream:
+            raise RuntimeError("LangGraph execution failed to return a response_stream")
 
         accumulated_content = ""
         try:

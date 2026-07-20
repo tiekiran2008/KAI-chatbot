@@ -23,8 +23,8 @@ export function AuthProvider({ children }) {
       setSession(session);
       setLoading(false);
 
-      if (!session && pathname !== '/auth') {
-        router.push('/auth');
+      if (!session && pathname !== '/') {
+        router.push('/');
       }
     };
 
@@ -32,8 +32,8 @@ export function AuthProvider({ children }) {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (!session && pathname !== '/auth') {
-        router.push('/auth');
+      if (!session && pathname !== '/') {
+        router.push('/');
       }
     });
 

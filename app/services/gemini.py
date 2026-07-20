@@ -4,8 +4,10 @@ import asyncio
 from google import genai
 from google.genai import types
 from typing import List, Dict, Any, Optional, AsyncGenerator
+from langsmith import traceable
 
 from app.config import settings
+from app.tools import TOOLS_LIST, execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +34,18 @@ class GeminiService:
     # Internal helper: convert list[dict] → list[types.Content]
     # ------------------------------------------------------------------
     @staticmethod
-    def _to_contents(history: List[Dict[str, str]]) -> List[types.Content]:
-        """Convert role/content dicts to types.Content objects expected by the SDK."""
+    def _to_contents(history: List) -> List[types.Content]:
+        """Convert role/content dicts OR pass-through existing types.Content objects.
+        
+        Handles mixed lists: plain dicts from format_history_for_gemini AND
+        types.Content objects injected by generate_final_answer's tool path.
+        """
         contents = []
         for msg in history:
+            # Already a types.Content object (injected by tool result path) — pass through
+            if isinstance(msg, types.Content):
+                contents.append(msg)
+                continue
             role = "user" if msg["role"] == "user" else "model"
             contents.append(
                 types.Content(
@@ -48,6 +58,7 @@ class GeminiService:
     # ------------------------------------------------------------------
     # classify_query
     # ------------------------------------------------------------------
+    @traceable(run_type="llm")
     async def classify_query(self, query: str) -> str:
         """
         Classifies the incoming user query into exactly one of three categories:
@@ -64,7 +75,8 @@ class GeminiService:
                 "You are an expert conversational router. Classify the user query into exactly one of these categories:\n"
                 "- normal chat (general greetings, small talk, pleasantries, or feedback like 'hello', 'how are you', 'thank you')\n"
                 "- RAG question (questions specifically asking for information, facts, summaries, or analyses that are likely located inside files or documents, such as 'what does the contract say', 'summarize my uploaded document')\n"
-                "- follow-up question (continuation prompts, short directives, corrections, or follow-ups referencing prior conversation states, such as 'can you elaborate', 'explain that further', 'why?', 'tell me more')\n\n"
+                "- follow-up question (continuation prompts, short directives, corrections, or follow-ups referencing prior conversation states, such as 'can you elaborate', 'explain that further', 'why?', 'tell me more')\n"
+                "- tool execution (questions that require mathematical calculation, the current time/date, or factual searches about world knowledge on Wikipedia, such as 'what time is it', 'calculate 5*5', 'who is the president')\n\n"
                 "Your response must consist of exactly the category name, all lowercase. Do not generate anything else. No preamble, no punctuation, no markdown."
             ),
             max_output_tokens=10,
@@ -85,6 +97,8 @@ class GeminiService:
                 return "normal chat"
             elif "follow-up question" in result:
                 return "follow-up question"
+            elif "tool execution" in result:
+                return "tool execution"
             else:
                 return "RAG question"
         except Exception as e:
@@ -92,8 +106,37 @@ class GeminiService:
             return "RAG question"
 
     # ------------------------------------------------------------------
+    # _call_lightweight_gemini  (internal helper for memory analysis)
+    # ------------------------------------------------------------------
+    async def _call_lightweight_gemini(self, prompt: str, max_tokens: int = 80) -> Optional[str]:
+        """
+        Lightweight single-turn call used internally by the memory service.
+        Uses a short timeout and small output cap to keep background tasks fast.
+        """
+        if not self.client:
+            return None
+        try:
+            config = types.GenerateContentConfig(
+                max_output_tokens=max_tokens,
+                temperature=0.2,
+            )
+            response = await asyncio.wait_for(
+                self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=[prompt],
+                    config=config,
+                ),
+                timeout=8.0,
+            )
+            return response.text.strip() if response.text else None
+        except Exception as e:
+            logger.warning(f"[Memory LLM] Lightweight Gemini call failed: {e}")
+            return None
+
+    # ------------------------------------------------------------------
     # generate_response  (non-streaming)
     # ------------------------------------------------------------------
+    @traceable(run_type="llm")
     async def generate_response(
         self,
         history: List[Dict[str, str]],
@@ -117,6 +160,7 @@ class GeminiService:
             max_output_tokens=max_output_tokens,
             temperature=temperature,
             system_instruction=system_prompt if system_prompt else None,
+            tools=TOOLS_LIST,
         )
 
         retries = 0
@@ -133,6 +177,37 @@ class GeminiService:
                     ),
                     timeout=30.0,
                 )
+
+                # Handle potential function calls iteratively (up to 3 chained calls)
+                loop_count = 0
+                while loop_count < 3 and response.candidates and response.candidates[0].content and any(part.function_call for part in response.candidates[0].content.parts):
+                    part = next(p for p in response.candidates[0].content.parts if p.function_call)
+                    fc = part.function_call
+                    logger.info(f"LLM initiated function call (sync): {fc.name}")
+                    
+                    args = {k: v for k, v in fc.args.items()} if fc.args else {}
+                    result = execute_tool(fc.name, args)
+                    
+                    # Append model's action
+                    contents.append(response.candidates[0].content)
+                    
+                    # Append tool result
+                    func_resp_part = types.Part.from_function_response(
+                        name=fc.name,
+                        response={"result": result}
+                    )
+                    contents.append(types.Content(role="user", parts=[func_resp_part]))
+                    
+                    # Call Gemini again
+                    response = await asyncio.wait_for(
+                        self.client.aio.models.generate_content(
+                            model=self.model_name,
+                            contents=contents,
+                            config=config,
+                        ),
+                        timeout=30.0,
+                    )
+                    loop_count += 1
 
                 # Token counts
                 prompt_tokens = len(str(contents).split())
@@ -167,6 +242,7 @@ class GeminiService:
     # ------------------------------------------------------------------
     # generate_stream_response  (SSE streaming)
     # ------------------------------------------------------------------
+    @traceable(run_type="llm")
     async def generate_stream_response(
         self,
         history: List[Dict[str, str]],
@@ -190,6 +266,7 @@ class GeminiService:
             max_output_tokens=max_output_tokens,
             temperature=temperature,
             system_instruction=system_prompt if system_prompt else None,
+            tools=TOOLS_LIST,
         )
 
         retries = 0
@@ -206,9 +283,89 @@ class GeminiService:
                     contents=contents,
                     config=config,
                 )
+
+                # Collect all chunks first so we can inspect for function calls.
+                # We buffer the text chunks and only yield once we know it is not
+                # a function-call response (avoids partial-yield then redirect).
+                buffered_text: List[str] = []
+                function_call_name = ""
+                function_call_args: dict = {}
+                is_function_call = False
+
                 async for chunk in response_stream:
+                    # Check candidates for a function_call part (correct SDK path)
+                    fc = None
+                    if (
+                        chunk.candidates
+                        and chunk.candidates[0].content
+                        and chunk.candidates[0].content.parts
+                    ):
+                        for part in chunk.candidates[0].content.parts:
+                            if hasattr(part, "function_call") and part.function_call:
+                                fc = part.function_call
+                                break
+
+                    if fc:
+                        is_function_call = True
+                        function_call_name = fc.name
+                        function_call_args = (
+                            {k: v for k, v in fc.args.items()} if fc.args else {}
+                        )
+                        logger.info(
+                            f"[Gemini Stream] ✅ Function call detected: "
+                            f"{function_call_name!r} args={function_call_args!r}"
+                        )
+                        break  # Stop consuming stream; we'll handle the tool now
+
                     if chunk.text:
-                        yield chunk.text
+                        buffered_text.append(chunk.text)
+
+                # ── Handle function call if detected ──────────────────────────
+                if is_function_call:
+                    logger.info(
+                        f"[Gemini Stream] Executing tool: {function_call_name!r} "
+                        f"args={function_call_args!r}"
+                    )
+                    result = execute_tool(function_call_name, function_call_args)
+                    logger.info(
+                        f"[Gemini Stream] Tool '{function_call_name}' result: {result!r}"
+                    )
+
+                    # Append model's function-call request
+                    try:
+                        fc_part = types.Part.from_function_call(
+                            name=function_call_name, args=function_call_args
+                        )
+                        contents.append(types.Content(role="model", parts=[fc_part]))
+                    except AttributeError:
+                        fc_obj = types.FunctionCall(
+                            name=function_call_name, args=function_call_args
+                        )
+                        contents.append(
+                            types.Content(role="model", parts=[types.Part(function_call=fc_obj)])
+                        )
+
+                    # Append tool result
+                    func_resp_part = types.Part.from_function_response(
+                        name=function_call_name,
+                        response={"result": result}
+                    )
+                    contents.append(types.Content(role="user", parts=[func_resp_part]))
+
+                    # Resume streaming with full tool context
+                    follow_up_stream = await self.client.aio.models.generate_content_stream(
+                        model=self.model_name,
+                        contents=contents,
+                        config=config,
+                    )
+                    async for follow_chunk in follow_up_stream:
+                        if follow_chunk.text:
+                            yield follow_chunk.text
+                else:
+                    # No function call — yield buffered text tokens
+                    for text in buffered_text:
+                        yield text
+
                 return  # Stream completed successfully — exit retry loop
             except Exception as e:
                 retries += 1

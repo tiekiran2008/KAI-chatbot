@@ -11,7 +11,6 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 from google import genai
 from google.genai import types
@@ -227,26 +226,7 @@ for tool_name in TOOL_REGISTRY:
 print(f"  Total: {len(TOOL_REGISTRY)} tools")
 print("=" * 60)
 
-# Authentication Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
-
-# Mock User Database (auth stays in-memory; swap for Supabase auth later if needed)
-users_db = {
-    "user@example.com": {
-        "username": "user@example.com",
-        "full_name": "Test User",
-        "email": "user@example.com",
-        "hashed_password": pwd_context.hash("password123"),
-        "disabled": False,
-        "sub": "local-test-uuid",
-        "user_id": "local-test-uuid",
-    }
-}
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # In-memory document store (unchanged)
 documents_store: Dict[str, Dict[str, Any]] = {}
@@ -299,13 +279,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # Pydantic Models
 # ============================================================
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
 class User(BaseModel):
     username: str
     email: Optional[str] = None
@@ -313,18 +286,6 @@ class User(BaseModel):
     disabled: Optional[bool] = None
     sub: Optional[str] = None  # Supabase UUID (auth.uid()), used as user_id in RLS
     user_id: Optional[str] = None
-
-class UserInDB(User):
-    hashed_password: str
-
-class RegisterRequest(BaseModel):
-    name: str
-    email: str
-    password: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
 
 class ChatRequest(BaseModel):
     message: str
@@ -353,29 +314,10 @@ class AvatarUpload(BaseModel):
 # Auth Utilities
 # ============================================================
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def get_user(db, username: str):
-    if username in db:
-        user_dict = db[username]
-        return UserInDB(**user_dict)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
 async def get_current_user(token: str = Depends(oauth2_scheme), request: Request = None):
     print("REAL AUTH FILE EXECUTED")
     print("AUTH HEADER:", request.headers.get("Authorization") if request else "request not available")
     print("TOKEN:", token[:50])
-    # Debug: show token slice
-    print("JWT TOKEN FOUND:", token[:50])
 
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
     credentials_exception = HTTPException(
@@ -384,99 +326,48 @@ async def get_current_user(token: str = Depends(oauth2_scheme), request: Request
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        # Step 1: Decode header without verification to detect algorithm and issuer
-        print("[DEBUG] Decoding JWT header without verification...")
         unverified_header = jwt.get_unverified_header(token)
         alg = unverified_header.get("alg", "HS256")
-        print(f"[DEBUG] JWT algorithm from header: {alg}")
 
-        # Step 2: Decode payload without verification to detect if this is a Supabase token
-        unverified_payload = jwt.decode(
-            token,
-            options={"verify_signature": False, "verify_aud": False},
-            algorithms=[alg],
-            key="",
-        )
-        iss = unverified_payload.get("iss", "")
-        role = unverified_payload.get("role", "")
-        print(f"[DEBUG] Unverified payload iss={iss!r} role={role!r}")
-        is_supabase_token = (iss == "supabase" or role == "authenticated")
-        print(f"[DEBUG] is_supabase_token={is_supabase_token}")
-
-        if is_supabase_token:
-            # Step 3a: Validate Supabase JWT
-            if not SUPABASE_JWT_SECRET:
-                print("[WARN] SUPABASE_JWT_SECRET not set - trusting unverified Supabase payload")
-                payload = unverified_payload
-            else:
-                print(f"[DEBUG] Verifying Supabase token with alg={alg}...")
-                payload = jwt.decode(
-                    token,
-                    SUPABASE_JWT_SECRET,
-                    algorithms=[alg],
-                    options={"verify_aud": False},
-                )
-                print("[DEBUG] Supabase token verified successfully")
-
-            # *** Always attach JWT to Supabase client so RLS runs as the authenticated user ***
-            print("SETTING SUPABASE JWT")
-            print("TOKEN PREFIX =", token[:50])
-            supabase.postgrest.auth(token)
-            # Also set it on options to be thorough for other clients (storage/realtime)
-            supabase.options.headers["Authorization"] = f"Bearer {token}"
-            print("SUPABASE AUTH ATTACHED")
-
-            # Supabase uses 'sub' as the user identifier (UUID) — this must match auth.uid() in RLS
-            sub = payload.get("sub")
-            email = payload.get("email") or payload.get("user_metadata", {}).get("email", "")
-            print("JWT SUB =", sub)
-            print(f"[DEBUG] Supabase user sub={sub} email={email}")
-            if not sub:
-                print("AUTH FAILURE REASON: Missing 'sub' in Supabase token payload")
-                raise credentials_exception
-
-            # Use email as username (display/lookup key), sub as RLS identity
-            username = email or sub
-            # Auto-register Supabase user into in-memory db if not present
-            if username not in users_db:
-                users_db[username] = {
-                    "username": username,
-                    "full_name": payload.get("user_metadata", {}).get("full_name", "Supabase User"),
-                    "email": email,
-                    "hashed_password": "",
-                    "disabled": False,
-                    "sub": sub,  # store the UUID for RLS
-                    "user_id": sub,
-                }
-                print(f"[DEBUG] Auto-provisioned Supabase user: {username} sub={sub}")
-            else:
-                # Ensure sub is always up-to-date even for existing entries
-                users_db[username]["sub"] = sub
-                users_db[username]["user_id"] = sub
-            return UserInDB(**users_db[username])
-
-
+        if not SUPABASE_JWT_SECRET:
+            print("[WARN] SUPABASE_JWT_SECRET not set - trusting unverified Supabase payload")
+            payload = jwt.decode(
+                token,
+                options={"verify_signature": False, "verify_aud": False},
+                algorithms=[alg],
+                key="",
+            )
         else:
-            # Step 3b: Validate local HS256 JWT
-            print(f"[DEBUG] Validating local JWT with SECRET_KEY and alg={ALGORITHM}...")
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            username: str = payload.get("sub")
-            if username is None:
-                print("AUTH FAILURE REASON: Missing 'sub' in local JWT payload")
-                raise credentials_exception
-            token_data = TokenData(username=username)
-            user = get_user(users_db, username=token_data.username)
-            if user is None:
-                print(f"AUTH FAILURE REASON: User '{token_data.username}' not found in local db")
-                raise credentials_exception
-            print(f"[DEBUG] Local user authenticated: {user.username}")
-            return user
+            payload = jwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=[alg],
+                options={"verify_aud": False},
+            )
+
+        supabase.postgrest.auth(token)
+        supabase.options.headers["Authorization"] = f"Bearer {token}"
+
+        sub = payload.get("sub")
+        email = payload.get("email") or payload.get("user_metadata", {}).get("email", "")
+        if not sub:
+            print("AUTH FAILURE REASON: Missing 'sub' in Supabase token payload")
+            raise credentials_exception
+
+        username = email or sub
+        return User(
+            username=username,
+            full_name=payload.get("user_metadata", {}).get("full_name", "Supabase User"),
+            email=email,
+            disabled=False,
+            sub=sub,
+            user_id=sub,
+        )
 
     except HTTPException:
         raise
     except JWTError as e:
         print("JWT ERROR:", str(e))
-        print("AUTH FAILURE REASON:", str(e))
         raise credentials_exception
     except Exception as e:
         print("UNEXPECTED AUTH ERROR:", str(e))
@@ -628,43 +519,6 @@ async def root():
 
 
 # --- Auth ---
-
-@app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
-async def register(user: RegisterRequest):
-    if user.email in users_db:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    users_db[user.email] = {
-        "username": user.email,
-        "full_name": user.name,
-        "email": user.email,
-        "hashed_password": get_password_hash(user.password),
-        "disabled": False,
-    }
-    return {"message": "User created successfully"}
-
-
-@app.post("/api/v1/auth/login")
-async def login(credentials: LoginRequest):
-    user = get_user(users_db, credentials.email)
-    if not user or not verify_password(credentials.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {"email": user.email, "name": user.full_name},
-    }
-
 
 @app.get("/api/v1/auth/me")
 async def get_me(current_user: User = Depends(get_current_active_user)):

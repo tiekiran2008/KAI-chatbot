@@ -236,16 +236,29 @@ avatars_db: Dict[str, str] = {}
 
 app = FastAPI(title="Gemini Chat API")
 
+# Setup CORS Origins
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+frontend_url = os.getenv("FRONTEND_URL", "")
+
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://kai-chatbot-phi.vercel.app",
+]
+
+if frontend_url and frontend_url not in origins:
+    origins.append(frontend_url)
+if cors_origins_env:
+    origins.extend([o.strip() for o in cors_origins_env.split(",") if o.strip() and o.strip() not in origins])
+
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    allow_methods=["*"],
+    allow_headers=["*"],
     expose_headers=["Content-Length"],
     max_age=600,
 )

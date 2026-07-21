@@ -1,0 +1,24 @@
+[35mDockerfile[m[36m:[m  CMD curl -f http://localhost:8000/api/v1[1;31m/chat[m || exit 1
+[35mapp/api/__init__.py[m[36m:[mapi_router.include_router(chat.router, prefix="[1;31m/chat[m", tags=["Chat"])
+[35mbackend/main.py[m[36m:[m# /api/v1[1;31m/chat[m  — Chat session CRUD (Supabase-backed)
+[35mbackend/main.py[m[36m:[m@app.get("/api/v1[1;31m/chat[m")
+[35mbackend/main.py[m[36m:[m@app.post("/api/v1[1;31m/chat[m/", status_code=201)
+[35mbackend/main.py[m[36m:[m@app.get("/api/v1[1;31m/chat[m/{chat_id}")
+[35mbackend/main.py[m[36m:[m@app.delete("/api/v1[1;31m/chat[m/{chat_id}", status_code=204)
+[35mbackend/main.py[m[36m:[m@app.patch("/api/v1[1;31m/chat[m/{chat_id}")
+[35mbackend/main.py[m[36m:[m# POST /api/v1[1;31m/chat[m/{id}/stream  — Gemini SSE streaming
+[35mbackend/main.py[m[36m:[m@app.post("/api/v1[1;31m/chat[m/{chat_id}/stream")
+[35mbackend/test_api_endpoint.py[m[36m:[m    f"{base_url}[1;31m/chat[m",
+[35mdocker-compose.yml[m[36m:[m      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1[1;31m/chat[m"]
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/${chatId}`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/${chatId}`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/${chatId}`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m        const res = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m      const response = await fetch(`${API_BASE}[1;31m/chat[m/${chatId}/stream`, {
+[35mfrontend/src/app/chat/page.jsx[m[36m:[m          const syncRes = await fetchWithTimeout(`${API_BASE}[1;31m/chat[m/${chatId}`, {
+[35mfrontend/src/app/page.jsx[m[36m:[m        if (session) router.push('[1;31m/chat[m');
+[35mfrontend/src/app/page.jsx[m[36m:[m          redirectTo: `${window.location.origin}[1;31m/chat[m`,
+[35mfrontend/src/app/page.jsx[m[36m:[m        router.push('[1;31m/chat[m');
+[35mfrontend/src/app/page.jsx[m[36m:[m        router.push('[1;31m/chat[m');

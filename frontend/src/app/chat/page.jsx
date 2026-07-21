@@ -331,7 +331,7 @@ export default function ChatPage() {
   // --- Backend Ingestion Handlers ---
   const fetchChats = async () => {
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/chat`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat`, {
         headers: getAuthHeaders()
       });
       if (res.ok) {
@@ -367,7 +367,7 @@ export default function ChatPage() {
     setStreamFailed(false);
 
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/chat/${chatId}`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat/${chatId}`, {
         headers: getAuthHeaders()
       });
       if (res.ok) {
@@ -416,7 +416,7 @@ export default function ChatPage() {
     setLastPrompt('');
     
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/chat/`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat/`, {
         method: "POST",
         headers: {
           ...getAuthHeaders(),
@@ -437,7 +437,7 @@ export default function ChatPage() {
 
   const handleDeleteChat = async (chatId) => {
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/chat/${chatId}`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat/${chatId}`, {
         method: "DELETE",
         headers: getAuthHeaders()
       });
@@ -456,7 +456,7 @@ export default function ChatPage() {
 
   const handleRenameChat = async (chatId, newTitle) => {
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/chat/${chatId}`, {
+      const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat/${chatId}`, {
         method: "PATCH",
         headers: {
           ...getAuthHeaders(),
@@ -512,7 +512,7 @@ export default function ChatPage() {
     // 1. Initialize a new chat thread automatically if none is active
     if (!chatId) {
       try {
-        const res = await fetchWithTimeout(`${API_BASE}/chat/`, {
+        const res = await fetchWithTimeout(`${API_BASE}/api/v1/chat/`, {
           method: "POST",
           headers: {
             ...getAuthHeaders(),
@@ -560,7 +560,7 @@ export default function ChatPage() {
       const controller = new AbortController();
       const handshakeTimer = setTimeout(() => controller.abort(), 15000);
       
-      const response = await fetch(`${API_BASE}/chat/${chatId}/stream`, {
+      const response = await fetch(`${API_BASE}/api/v1/chat/${chatId}/stream`, {
         method: "POST",
         headers: {
           ...getAuthHeaders(),
@@ -684,7 +684,7 @@ export default function ChatPage() {
       fetchChats();
       if (chatId) {
         try {
-          const syncRes = await fetchWithTimeout(`${API_BASE}/chat/${chatId}`, {
+          const syncRes = await fetchWithTimeout(`${API_BASE}/api/v1/chat/${chatId}`, {
             headers: { "Authorization": `Bearer ${token}` }
           });
           if (syncRes.ok) {

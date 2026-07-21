@@ -19,7 +19,7 @@ export default function DocumentPreview({ isOpen, docId, docName, token, onClose
     setChunks([]);
 
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/documents/${docId}/preview`, {
+      const res = await fetch("https://kai-chatbot-backend.onrender.com/...", {
         headers: { "Authorization": `Bearer ${token}` }
       });
 

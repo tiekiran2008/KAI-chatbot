@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 
 const Markdown = dynamic(() => import('@/components/Markdown'), { ssr: false });
 
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE = "https://kai-chatbot-backend.onrender.com";
 
 export default function HITLApprovalCard({ hitlData, chatId, authHeaders, onComplete }) {
   const [isSubmitting, setIsSubmitting] = useState(false);

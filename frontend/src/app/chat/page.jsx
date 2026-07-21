@@ -28,7 +28,7 @@ import ChatInput from '@/components/ChatInput';
 // Import Supabase Auth client & helper
 import { supabase, isSupabaseEnabled } from '@/lib/supabase';
 
-const API_BASE = "https://kai-chatbot-backend.onrender.com";
+import { API_BASE_URL as API_BASE } from '@/lib/config';
 
 // Production-grade fetch wrapper with absolute Timeout and Abort signal handling
 const fetchWithTimeout = async (url, options = {}, timeout = 12000) => {

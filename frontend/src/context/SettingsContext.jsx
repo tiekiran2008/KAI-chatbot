@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
+import { API_BASE_URL } from "@/lib/config";
 
 const SettingsContext = createContext({});
 
@@ -28,7 +29,7 @@ export function SettingsProvider({ children }) {
       return;
     }
     
-    fetch("http://localhost:8000/api/v1/settings", {
+    fetch(`${API_BASE_URL}/api/v1/settings`, {
       headers: { "Authorization": `Bearer ${token}` }
     })
     .then(res => res.json())
@@ -48,7 +49,7 @@ export function SettingsProvider({ children }) {
     if (!token) return;
 
     try {
-      await fetch("http://localhost:8000/api/v1/settings", {
+      await fetch(`${API_BASE_URL}/api/v1/settings`, {
         method: "POST",
         headers: { 
           "Authorization": `Bearer ${token}`,

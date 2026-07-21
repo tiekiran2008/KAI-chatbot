@@ -4,6 +4,7 @@ import {
   Database, Shield, UploadCloud, LogOut, Check
 } from 'lucide-react';
 import { useSettings } from '@/context/SettingsContext';
+import { API_BASE_URL } from '@/lib/config';
 
 const SettingsModal = ({ isOpen, onClose, user, onLogout }) => {
   const { settings, updateSettings } = useSettings();
@@ -29,7 +30,7 @@ const SettingsModal = ({ isOpen, onClose, user, onLogout }) => {
       const token = localStorage.getItem("token");
       if (token) {
         try {
-          await fetch("http://localhost:8000/api/v1/users/avatar", {
+          await fetch(`${API_BASE_URL}/api/v1/users/avatar`, {
             method: "POST",
             headers: { 
               "Authorization": `Bearer ${token}`,

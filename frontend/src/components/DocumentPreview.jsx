@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, FileText, Search, Loader2, Calendar, HardDrive, Info } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/config';
 
 export default function DocumentPreview({ isOpen, docId, docName, token, onClose }) {
   const [chunks, setChunks] = useState([]);
@@ -19,7 +20,7 @@ export default function DocumentPreview({ isOpen, docId, docName, token, onClose
     setChunks([]);
 
     try {
-      const res = await fetch("https://kai-chatbot-backend.onrender.com/...", {
+      const res = await fetch(`${API_BASE_URL}/documents/${docId}/preview`, {
         headers: { "Authorization": `Bearer ${token}` }
       });
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { API_BASE_URL } from '@/lib/config';
 
 export default function UploadModal({ isOpen, onClose, onUploadSuccess, token }) {
   const [dragActive, setDragActive] = useState(false);
@@ -73,7 +74,7 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess, token })
 
     try {
       setProgress(50);
-      const response = await fetch("http://localhost:8000/api/v1/documents/upload", {
+      const response = await fetch(`${API_BASE_URL}/api/v1/documents/upload`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${token}`
